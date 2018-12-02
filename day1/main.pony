@@ -4,17 +4,24 @@ use "itertools"
 
 class Day1 is AOCApp
   fun part1(file_lines: Array[String] val): (String | AOCAppError) =>
-    var freq: I64 = 0
-
-    for c in file_lines.values() do
-      try
-        freq = freq + c.clone().>strip().>remove("+").i64()?
-      else
-        return AOCAppError("error converting '" + c + "' to u64")
-      end
+    match Iter[String](file_lines.values()).fold[(I64 | AOCAppError)](0, {
+      (f, ch) =>
+        match f
+        | let freq: I64 =>
+          try
+            freq + ch.clone().>strip().>remove("+").i64()?
+          else
+            AOCAppError("error converting '" + ch + "' to u64")
+          end
+        | let aae: AOCAppError =>
+          aae
+        end
+    })
+    | let n: I64 =>
+      n.string()
+    | let aae: AOCAppError =>
+      aae
     end
-
-    freq.string()
 
   fun part2(file_lines: Array[String] val): (String | AOCAppError) =>
     var freq: I64 = 0

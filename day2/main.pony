@@ -49,9 +49,9 @@ class Day2 is AOCApp
 
   fun part2(file_lines: Array[String] val): (String | AOCAppError) =>
     var part_match: (None | (String, String)) = None
-    for id in file_lines.values() do
+    for (i, id) in file_lines.pairs() do
       try
-        let match_location = file_lines.find(id
+        let match_location = file_lines.find(id, i + 1
           where predicate =
             {(a, b) => HammingDistance(a, b) == 1})?
         part_match = (id, file_lines(match_location)?)

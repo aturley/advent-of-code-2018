@@ -43,6 +43,63 @@ primitive Parse
       error
     end
 
+primitive SleepData
+  fun apply(lines: Array[String] val): (Map[GuardId, U64], Map[GuardId, Counter[U64]]) ? =>
+    let events_no_id = Array[GuardEvent]
+
+    for l in lines.values() do
+      let e = Parse.event_from_string(l)?
+      events_no_id.push(Parse.event_from_string(l)?)
+    end
+
+    let sorted_events_no_id =
+      Sort[Array[GuardEvent], GuardEvent](events_no_id)
+
+    let sorted_events = Array[GuardEvent]
+
+    var last_id: GuardId = 0
+    for e in sorted_events_no_id.values() do
+      match e
+        | let bs: BeginShift =>
+          last_id = bs.guard_id()
+          sorted_events.push(bs)
+        | let no_id: (FallsAsleepNoId | WakesUpNoId) =>
+          let wid = no_id.add_id(last_id)
+          sorted_events.push(wid)
+        else
+          error
+        end
+    end
+
+    let sleep_sessions = Array[SleepSession]
+
+    var last_sleep_start: U64 = 0
+
+    for e in sorted_events.values() do
+      match e
+      | let fa: FallsAsleep =>
+        last_sleep_start = fa.dt().minute
+      | let wu: WakesUp =>
+        sleep_sessions.push(SleepSession(wu.guard_id(), last_sleep_start, wu.dt().minute))
+      end
+    end
+
+    let total_sleep = Map[GuardId, U64]
+    let sleep_hists = Map[GuardId, Counter[U64]]
+
+    for ss in sleep_sessions.values() do
+      let gid = ss.id
+      total_sleep(gid) = (try total_sleep(gid)? else 0 end) + ss.duration()
+
+      let sh = try sleep_hists(gid)? else Counter[U64] end
+      for m in ss.minutes().values() do
+        sh.add(m)
+      end
+      sleep_hists(gid) = sh
+    end
+
+    (total_sleep, sleep_hists)
+
 class val SleepSession
   let id: U64
   let _start: U64
@@ -192,62 +249,7 @@ type GuardEventWithId is (BeginShift | FallsAsleep | WakesUp)
 
 class Day4 is AOCApp
   fun part1(file_lines: Array[String] val): (String | AOCAppError) ? =>
-    let events_no_id = Array[GuardEvent]
-
-    for l in file_lines.values() do
-      try
-        let e = Parse.event_from_string(l)?
-        events_no_id.push(Parse.event_from_string(l)?)
-      else
-        return AOCAppError("Error parsing line '" + l + "'")
-      end
-    end
-
-    let sorted_events_no_id =
-      Sort[Array[GuardEvent], GuardEvent](events_no_id)
-
-    let sorted_events = Array[GuardEvent]
-
-    var last_id: GuardId = 0
-    for e in sorted_events_no_id.values() do
-      match e
-        | let bs: BeginShift =>
-          last_id = bs.guard_id()
-          sorted_events.push(bs)
-        | let no_id: (FallsAsleepNoId | WakesUpNoId) =>
-          let wid = no_id.add_id(last_id)
-          sorted_events.push(wid)
-        else
-          error
-        end
-    end
-
-    let sleep_sessions = Array[SleepSession]
-
-    var last_sleep_start: U64 = 0
-
-    for e in sorted_events.values() do
-      match e
-      | let fa: FallsAsleep =>
-        last_sleep_start = fa.dt().minute
-      | let wu: WakesUp =>
-        sleep_sessions.push(SleepSession(wu.guard_id(), last_sleep_start, wu.dt().minute))
-      end
-    end
-
-    let total_sleep = Map[GuardId, U64]
-    let sleep_hists = Map[GuardId, Counter[U64]]
-
-    for ss in sleep_sessions.values() do
-      let gid = ss.id
-      total_sleep(gid) = (try total_sleep(gid)? else 0 end) + ss.duration()
-
-      let sh = try sleep_hists(gid)? else Counter[U64] end
-      for m in ss.minutes().values() do
-        sh.add(m)
-      end
-      sleep_hists(gid) = sh
-    end
+    (let total_sleep, let sleep_hists) = SleepData(file_lines)?
 
     var longest_sleeper: (GuardId, U64) = (0, 0)
     for (id, time) in total_sleep.pairs() do
@@ -259,6 +261,24 @@ class Day4 is AOCApp
     (let longest_minute, _) = sleep_hists(longest_sleeper._1)?.max()?
 
     (longest_sleeper._1 * longest_minute).string()
+
+  fun part2(file_lines: Array[String] val): (String | AOCAppError) ? =>
+    (let total_sleep, let sleep_hists) = SleepData(file_lines)?
+
+    var minute: U64 = 0
+    var guard_id: GuardId = 0
+    var minute_count: USize = 0
+
+    for (gid, hist) in sleep_hists.pairs() do
+      (let m, let mc) = hist.max()?
+      if mc > minute_count then
+        minute = m
+        minute_count = mc
+        guard_id = gid
+      end
+    end
+
+    (guard_id * minute).string()
 
 actor Main
   new create(env: Env) =>

@@ -1,160 +1,168 @@
 use "aoc-tools"
 use "collections"
-use "debug"
 use "itertools"
 use "ponytest"
 use "time"
 
-actor Manager
-  let _app: Day7
-  var _start_time: U64
-  let _available: SetIs[Worker] = SetIs[Worker]
+class Worker
+  var _time_remaining: U64
+  var _cur: (String | None)
 
-  let _graph: Map[String, Set[String]]
-  let _remaining: Set[String]
-  var _cur: String = ""
-  let _pending: Set[String] = Set[String]
+  new create() =>
+    _time_remaining = 0
+    _cur = None
 
-  new create(app: Day7, file_lines: Array[String] val) =>
-    _app = app
-    _start_time = 0
+  fun time_remaining(): U64 =>
+    _time_remaining
 
-    _graph = Map[String, Set[String]]
+  fun is_ready(): Bool =>
+    _time_remaining == 0
 
-    for d in Iter[String](file_lines.values())
-      .map[(String, String)]({(l) ? => ParseDependency(l)?})
-    do
-      try
-        _graph.upsert(d._2, Set[String].>set(d._1), {(o, n) => o.>union(n.values())})?
-        if not _graph.contains(d._1) then
-          _graph(d._1) = Set[String]
-        end
-      end
-    end
-
-    _remaining = Set[String]
-
-    for k in _graph.keys() do
-      _remaining.set(k)
-    end
-
-    _cur = "[" // bigger than "Z"
-
-    for (k, ds) in _graph.pairs() do
-      if ds.size() == 0 then
-        _cur = if k < _cur then
-          k
-        else
-          _cur
-        end
-      end
-    end
-
-    Debug("cur starts at '" + _cur + "'")
-
-  be start() =>
-    _start_time = Time.millis().u64()
-
-  be finished(worker: Worker, item: String) =>
-    Debug("finished " + item)
-    _pending.unset(item)
-
-    for ds in _graph.values() do
-      ds.unset(item)
-    end
-
-    _app.finished_part2((Time.millis().u64() - _start_time) / 1000)
-    _available.set(worker)
-    _new_work()
-
-  be new_work(worker: Worker) =>
-    _available.set(worker)
-    _new_work()
-
-  fun ref _new_work() =>
-    if _remaining.size() > 0 then
-      try
-        if not (_cur == "[") then
-          let worker = _available.values().next()?
-          _remaining.unset(_cur)
-          _pending.set(_cur)
-          worker.work(_cur)
-          Debug("assignedx " + _cur)
-          _available.unset(worker)
-        end
-      else
-        // no more available workers
-        return
-      end
-    end
-
-    let empties = Set[String]
-
-    for (p, ds) in _graph.pairs() do
-      if _remaining.contains(p) and (ds.size() == 0) then
-        empties.set(p)
-      end
-    end
-
-    let ei = empties.values()
-
-    _cur = try
-      ei.next()?
-    else
-      // no empties
-      _cur = "["
+  fun ref subtract_time(t: U64): (None | String) =>
+    if _time_remaining == 0 then
       return
     end
 
-    for e in ei do
-      _cur = if e < _cur then
-        e
+    _time_remaining = _time_remaining - t
+    if _time_remaining == 0 then
+      let c = _cur
+      _cur = None
+      return c
+    end
+
+  fun ref assign_work(c: String, t: U64) =>
+    _time_remaining = t
+    _cur = c
+
+class Manager
+  let _workers: Array[Worker]
+  let _graph: WorkGraph
+  let _add_time: U64
+  var _total_work_time: U64 = 0
+
+  new create(num_workers: USize, graph: WorkGraph, add_time: U64) =>
+    _workers = Array[Worker](num_workers)
+    _graph = graph
+    _add_time = add_time
+
+    for _ in Range(0, num_workers) do
+      _workers.push(Worker)
+    end
+
+  fun ref process(): Bool =>
+    // get min time remaining
+
+    var min_time_remaining: (U64 | None) =  None
+
+    for w in _workers.values() do
+      min_time_remaining = if w.time_remaining() > 0 then
+        match min_time_remaining
+        | let mtr: U64 =>
+          mtr.min(w.time_remaining())
+        else
+          w.time_remaining()
+        end
       else
-        _cur
+        min_time_remaining
       end
     end
 
-    _new_work()
-
-class WorkerNotify is TimerNotify
-  let _worker: Worker
-
-  new iso create(worker: Worker) =>
-    _worker = worker
-  fun ref apply(timer: Timer, count: U64): Bool =>
-    _worker.ping()
-    false
-
-actor Worker
-  var _cur: (String | None)
-  let _manager: Manager
-  let _timers: Timers
-  let _time_add: U64
-
-  new create(manager: Manager, timers: Timers, time_add: U64) =>
-    _cur = None
-    _manager = manager
-    _timers = timers
-    _time_add = time_add
-
-  be ping() =>
-    _get_new_work()
-
-  be work(item: String) =>
-    _cur = item
-    try
-      _set_timer(item(0)?)
+    let mtr = try
+      min_time_remaining as U64
+    else
+      0
     end
 
-  fun ref _set_timer(t: U8) =>
-    let timer = Timer(WorkerNotify(this), (_time_add + (t -'A').u64()) * 1_000_000_000)
-    _timers(consume timer)
+    // update the worker times
 
-  fun ref _get_new_work() =>
-    try
-      _manager.finished(this, _cur as String)
-      _cur = None
+    let ready_set = SetIs[Worker]
+
+    for w in _workers.values() do
+      if w.time_remaining() == 0 then
+        ready_set.set(w)
+      else
+        let c = w.subtract_time(mtr)
+        match c
+        | let done: String =>
+          _graph.mark_finished(done)
+          ready_set.set(w)
+        end
+      end
     end
+
+    _total_work_time = _total_work_time + mtr
+
+    for w in ready_set.values() do
+      match _graph.get_next_available()
+      | let c: String =>
+        let t = try (c(0)? - 'A').u64() + _add_time else 1 end
+        w.assign_work(c, t)
+      else
+        break
+      end
+    end
+
+    _graph.is_done()
+
+  fun total_time(): U64 =>
+    _total_work_time
+
+class WorkGraph
+  let _dependencies: Array[(String, String)]
+  let _remaining: Set[String]
+  let _pending: Set[String]
+
+  new create(lines: Array[String] val) ?=>
+    _dependencies = Array[(String, String)]
+    _remaining = Set[String]
+    _pending = Set[String]
+
+    for l in lines.values() do
+      let d = ParseDependency(l)?
+      _dependencies.push(d)
+      _remaining.set(d._1)
+      _remaining.set(d._2)
+    end
+
+  fun ref get_next_available(): (String | None) =>
+    let available = _remaining.clone()
+
+    // d => d._1 must be completed before d._2 can begin
+
+    for d in _dependencies.values() do
+      // if d._1 is remaining or pending then remove it from available
+      if _remaining.contains(d._1) or _pending.contains(d._1) then
+        available.unset(d._2)
+      end
+    end
+
+    var next: (None | String) = None
+
+    for a in available.values() do
+      match next
+      | None =>
+        next = a
+      | let s: String =>
+        next = if a < s then
+          a
+        else
+          s
+        end
+      end
+    end
+
+    match next
+    | let s: String =>
+      _pending.set(s)
+      _remaining.unset(s)
+    end
+    next
+
+  fun ref mark_finished(c: String) =>
+    _pending.unset(c)
+
+  fun is_done(): Bool =>
+    (_remaining.size() + _pending.size()) == 0
 
 class Day7Tests is TestList
   fun tag tests(test: PonyTest) =>
@@ -174,59 +182,6 @@ primitive ParseDependency
 
 actor Day7 is AOCActorApp
   var _reporter: (AOCActorAppReporter | None) = None
-
-  be part1x(file_lines: Array[String] val, args: Array[String] val,
-    reporter: AOCActorAppReporter)
-  =>
-    var instructions: Array[String] = file_lines.clone()
-
-    let remaining = Set[String]
-
-    for x in Range[U8]('A', 'Z' + 1) do
-      for y in file_lines.values() do
-        let s = recover val String.from_utf32(x.u32()) end
-        if y.contains("Step " + s) or y.contains("step " + s) then
-          remaining.set(recover String.from_utf32(x.u32()) end)
-        end
-      end
-    end
-
-    var steps: String = ""
-
-    while true do
-      // find step to process
-      var cur = "a"
-
-      for s in remaining.values() do
-        try
-          instructions.find("before step " + s where predicate = {(l, r) => l.contains(r)})?
-        else
-          cur = if s < cur then
-            s
-          else
-            cur
-          end
-        end
-      end
-
-      if cur == "a" then
-        break
-      end
-
-      let new_instructions = Array[String]
-
-      for x in instructions.values() do
-        if not x.contains("Step " + cur) then
-          new_instructions.push(x)
-        end
-      end
-
-      remaining.unset(cur)
-      steps = steps + cur
-      instructions = new_instructions
-    end
-
-    reporter(steps)
 
   be part1(file_lines: Array[String] val, args: Array[String] val,
     reporter: AOCActorAppReporter)
@@ -304,32 +259,26 @@ actor Day7 is AOCActorApp
   be part2(file_lines: Array[String] val, args: Array[String] val,
     reporter: AOCActorAppReporter)
   =>
-    _reporter = reporter
-
-    let workers = try
-      args(3)?.usize()?
+    let graph = try
+      WorkGraph(file_lines)?
     else
-      5
+      reporter.err("could not parse work graph")
+      return
     end
 
-    let time_add = try
-      args(4)?.u64()?
+    (let num_workers: USize, let add_time: U64)= try
+      (args(3)?.usize()?, args(4)?.u64()?)
     else
-      60
+      (5, 60)
     end
 
-    let manager = Manager(this, file_lines)
-    manager.start()
+    let manager = Manager(num_workers, graph, add_time)
 
-    for i in Range(0, workers) do
-      Debug("created worker " + i.string())
-      manager.new_work(Worker(manager, Timers, time_add))
+    while manager.process() == false do
+      None
     end
 
-  be finished_part2(dur: U64) =>
-    try
-      (_reporter as AOCActorAppReporter)(dur.string())
-    end
+    reporter(manager.total_time().string())
 
 actor Main
   new create(env: Env) =>

@@ -1,0 +1,9 @@
+{
+  "deps": [
+    {
+      "tag": "0.0.4",
+      "type": "github",
+      "repo": "aturley/aoc-tools"
+    }
+  ]
+}
